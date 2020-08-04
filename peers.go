@@ -21,7 +21,7 @@ package groupcache
 import (
 	"context"
 
-	pb "github.com/golang/groupcache/groupcachepb"
+	pb "github.com/TaylorOno/groupcache/groupcachepb"
 )
 
 // ProtoGetter is the interface that must be implemented by a peer.

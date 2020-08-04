@@ -32,8 +32,8 @@ import (
 
 	"github.com/golang/protobuf/proto"
 
-	pb "github.com/golang/groupcache/groupcachepb"
-	testpb "github.com/golang/groupcache/testpb"
+	pb "github.com/TaylorOno/groupcache/groupcachepb"
+	testpb "github.com/TaylorOno/groupcache/testpb"
 )
 
 var (
@@ -203,7 +203,7 @@ func TestCacheEviction(t *testing.T) {
 	}
 
 	g := stringGroup.(*Group)
-	evict0 := g.mainCache.nevict
+	evict0 := g.mainCache.evictions()
 
 	// Trash the cache with other keys.
 	var bytesFlooded int64
@@ -214,7 +214,7 @@ func TestCacheEviction(t *testing.T) {
 		stringGroup.Get(dummyCtx, key, StringSink(&res))
 		bytesFlooded += int64(len(key) + len(res))
 	}
-	evicts := g.mainCache.nevict - evict0
+	evicts := g.mainCache.evictions() - evict0
 	if evicts <= 0 {
 		t.Errorf("evicts = %v; want more than 0", evicts)
 	}
@@ -295,8 +295,8 @@ func TestPeers(t *testing.T) {
 	resetCacheSize := func(maxBytes int64) {
 		g := testGroup
 		g.cacheBytes = maxBytes
-		g.mainCache = cache{}
-		g.hotCache = cache{}
+		g.mainCache = &cache{}
+		g.hotCache = &cache{}
 	}
 
 	// Base case; peers all up, with no problems.
@@ -440,8 +440,8 @@ func TestNoDedup(t *testing.T) {
 	// upon entry, we would increment nbytes twice but the entry would
 	// only be in the cache once.
 	const wantBytes = int64(len(testkey) + len(testval))
-	if g.mainCache.nbytes != wantBytes {
-		t.Errorf("cache has %d bytes, want %d", g.mainCache.nbytes, wantBytes)
+	if g.mainCache.bytes() != wantBytes {
+		t.Errorf("cache has %d bytes, want %d", g.mainCache.bytes(), wantBytes)
 	}
 }
 

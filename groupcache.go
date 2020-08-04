@@ -32,9 +32,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	pb "github.com/golang/groupcache/groupcachepb"
-	"github.com/golang/groupcache/lru"
-	"github.com/golang/groupcache/singleflight"
+	pb "github.com/TaylorOno/groupcache/groupcachepb"
+	"github.com/TaylorOno/groupcache/lru"
+	"github.com/TaylorOno/groupcache/singleflight"
 )
 
 // A Getter loads data for a key.
@@ -102,6 +102,8 @@ func newGroup(name string, cacheBytes int64, getter Getter, peers PeerPicker) *G
 		peers:      peers,
 		cacheBytes: cacheBytes,
 		loadGroup:  &singleflight.Group{},
+		mainCache: &cache{},
+		hotCache: &cache{},
 	}
 	if fn := newGroupHook; fn != nil {
 		fn(g)
@@ -150,7 +152,7 @@ type Group struct {
 	// (amongst its peers) is authoritative. That is, this cache
 	// contains keys which consistent hash on to this process's
 	// peer number.
-	mainCache cache
+	mainCache CacheProvider
 
 	// hotCache contains keys/values for which this peer is not
 	// authoritative (otherwise they would be in mainCache), but
@@ -160,7 +162,7 @@ type Group struct {
 	// network card could become the bottleneck on a popular key.
 	// This cache is used sparingly to maximize the total number
 	// of key/value pairs that can be stored globally.
-	hotCache cache
+	hotCache CacheProvider
 
 	// loadGroup ensures that each key is only fetched once
 	// (either locally or remotely), regardless of the number of
@@ -284,7 +286,7 @@ func (g *Group) load(ctx context.Context, key string, dest Sink) (value ByteView
 		}
 		g.Stats.LocalLoads.Add(1)
 		destPopulated = true // only one caller of load gets this return value
-		g.populateCache(key, value, &g.mainCache)
+		g.populateCache(key, value, g.mainCache)
 		return value, nil
 	})
 	if err == nil {
@@ -316,7 +318,7 @@ func (g *Group) getFromPeer(ctx context.Context, peer ProtoGetter, key string) (
 	// conditionally populate hotCache.  For now just do it some
 	// percentage of the time.
 	if rand.Intn(10) == 0 {
-		g.populateCache(key, value, &g.hotCache)
+		g.populateCache(key, value, g.hotCache)
 	}
 	return value, nil
 }
@@ -333,7 +335,7 @@ func (g *Group) lookupCache(key string) (value ByteView, ok bool) {
 	return
 }
 
-func (g *Group) populateCache(key string, value ByteView, cache *cache) {
+func (g *Group) populateCache(key string, value ByteView, cache CacheProvider) {
 	if g.cacheBytes <= 0 {
 		return
 	}
@@ -350,9 +352,9 @@ func (g *Group) populateCache(key string, value ByteView, cache *cache) {
 		// TODO(bradfitz): this is good-enough-for-now logic.
 		// It should be something based on measurements and/or
 		// respecting the costs of different resources.
-		victim := &g.mainCache
+		victim := g.mainCache
 		if hotBytes > mainBytes/8 {
-			victim = &g.hotCache
+			victim = g.hotCache
 		}
 		victim.removeOldest()
 	}
@@ -382,6 +384,16 @@ func (g *Group) CacheStats(which CacheType) CacheStats {
 	default:
 		return CacheStats{}
 	}
+}
+
+type CacheProvider interface {
+	stats() CacheStats
+	add(key string, value ByteView)
+	get(key string) (value ByteView, ok bool)
+	removeOldest()
+	bytes() int64
+	items() int64
+	evictions() int64
 }
 
 // cache is a wrapper around an *lru.Cache that adds synchronization,
@@ -456,6 +468,12 @@ func (c *cache) items() int64 {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.itemsLocked()
+}
+
+func (c *cache) evictions() int64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.nevict
 }
 
 func (c *cache) itemsLocked() int64 {
